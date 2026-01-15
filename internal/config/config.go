@@ -71,7 +71,7 @@ func SaveConfig(config *models.Config) error {
 		return fmt.Errorf("設定のシリアライズに失敗: %w", err)
 	}
 
-	if err := os.WriteFile(configPath, data, 0644); err != nil {
+	if err := os.WriteFile(configPath, data, 0600); err != nil {
 		return fmt.Errorf("設定ファイルの書き込みに失敗: %w", err)
 	}
 

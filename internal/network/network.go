@@ -10,12 +10,17 @@ import (
 	"github.com/fast-ip-change/fast-ip-change/pkg/models"
 )
 
+// Windows プロセス作成フラグ
+const (
+	createNoWindow = 0x08000000 // CREATE_NO_WINDOW: コンソールウィンドウを表示しない
+)
+
 // createHiddenCmd はコンソールウィンドウを表示しないコマンドを作成します
 func createHiddenCmd(name string, args ...string) *exec.Cmd {
 	cmd := exec.Command(name, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		HideWindow:    true,
-		CreationFlags: 0x08000000, // CREATE_NO_WINDOW
+		CreationFlags: createNoWindow,
 	}
 	return cmd
 }
@@ -32,24 +37,6 @@ func (e *NetworkError) Error() string {
 		return fmt.Sprintf("%s: %s (%v)", e.Code, e.Message, e.Err)
 	}
 	return fmt.Sprintf("%s: %s", e.Code, e.Message)
-}
-
-// isValidNICName はNIC名が安全かどうかを検証します
-func isValidNICName(name string) bool {
-	if len(name) == 0 || len(name) > 256 {
-		return false
-	}
-	// 危険な文字のチェック
-	dangerousChars := []string{
-		"&", "|", ";", "$", "`", "!", "<", ">", "(", ")", "{", "}", "[", "]",
-		"\"", "'", "\\", "\n", "\r", "\t", "\x00",
-	}
-	for _, char := range dangerousChars {
-		if strings.Contains(name, char) {
-			return false
-		}
-	}
-	return true
 }
 
 // GetNICList は利用可能なNICのリストを取得します
@@ -111,6 +98,19 @@ func GetNICList() ([]string, error) {
 	return nics, nil
 }
 
+// ipConfigPatterns は日本語/英語両対応のIP設定パターンを定義します
+var ipConfigPatterns = struct {
+	IP      []string
+	Subnet  []string
+	Gateway []string
+	DNS     []string
+}{
+	IP:      []string{"IP アドレス", "IP Address"},
+	Subnet:  []string{"サブネット マスク", "サブネット プレフィックス", "Subnet Mask", "Subnet Prefix"},
+	Gateway: []string{"デフォルト ゲートウェイ", "Default Gateway"},
+	DNS:     []string{"DNS サーバー", "DNS Servers"},
+}
+
 // GetCurrentIPConfig は指定されたNICの現在のIP設定を取得します
 func GetCurrentIPConfig(nicName string) (*models.Profile, error) {
 	cmd := createHiddenCmd("netsh", "interface", "ipv4", "show", "config", "name="+nicName)
@@ -123,61 +123,62 @@ func GetCurrentIPConfig(nicName string) (*models.Profile, error) {
 		}
 	}
 
-	// 出力を解析してIP設定を抽出
+	return parseIPConfig(nicName, string(output)), nil
+}
+
+// parseIPConfig はnetshの出力からIP設定を解析します
+func parseIPConfig(nicName, output string) *models.Profile {
 	profile := &models.Profile{
 		NICName: nicName,
 	}
 
-	// 日本語/英語両対応のパターン
-	ipPrefixes := []string{"IP アドレス", "IP Address"}
-	subnetPrefixes := []string{"サブネット マスク", "サブネット プレフィックス", "Subnet Mask", "Subnet Prefix"}
-	gatewayPrefixes := []string{"デフォルト ゲートウェイ", "Default Gateway"}
-	dnsPrefixes := []string{"DNS サーバー", "DNS Servers"}
-
-	lines := strings.Split(string(output), "\n")
+	lines := strings.Split(output, "\n")
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 
-		// IPアドレスを抽出
-		for _, prefix := range ipPrefixes {
-			if strings.HasPrefix(line, prefix) {
-				profile.IPAddress = extractLastValue(line)
-				break
-			}
+		if ip := extractValueByPrefixes(line, ipConfigPatterns.IP); ip != "" && profile.IPAddress == "" {
+			profile.IPAddress = ip
 		}
 
-		// サブネットマスクを抽出
-		for _, prefix := range subnetPrefixes {
-			if strings.HasPrefix(line, prefix) {
-				value := extractLastValue(line)
-				// サブネットプレフィックス（例: /24）をマスク形式に変換
-				if strings.HasPrefix(value, "/") || isNumeric(value) {
-					profile.SubnetMask = prefixToSubnetMask(value)
-				} else {
-					profile.SubnetMask = value
-				}
-				break
-			}
+		if subnet := extractSubnetValue(line); subnet != "" && profile.SubnetMask == "" {
+			profile.SubnetMask = subnet
 		}
 
-		// デフォルトゲートウェイを抽出
-		for _, prefix := range gatewayPrefixes {
-			if strings.HasPrefix(line, prefix) {
-				profile.Gateway = extractLastValue(line)
-				break
-			}
+		if gw := extractValueByPrefixes(line, ipConfigPatterns.Gateway); gw != "" && profile.Gateway == "" {
+			profile.Gateway = gw
 		}
 
-		// DNSサーバーを抽出（最初のものをプライマリDNSとして）
-		for _, prefix := range dnsPrefixes {
-			if strings.HasPrefix(line, prefix) && profile.DNSPrimary == "" {
-				profile.DNSPrimary = extractLastValue(line)
-				break
-			}
+		if dns := extractValueByPrefixes(line, ipConfigPatterns.DNS); dns != "" && profile.DNSPrimary == "" {
+			profile.DNSPrimary = dns
 		}
 	}
 
-	return profile, nil
+	return profile
+}
+
+// extractValueByPrefixes は指定されたプレフィックスに一致する行から値を抽出します
+func extractValueByPrefixes(line string, prefixes []string) string {
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(line, prefix) {
+			return extractLastValue(line)
+		}
+	}
+	return ""
+}
+
+// extractSubnetValue はサブネットマスク/プレフィックスの値を抽出します
+func extractSubnetValue(line string) string {
+	for _, prefix := range ipConfigPatterns.Subnet {
+		if strings.HasPrefix(line, prefix) {
+			value := extractLastValue(line)
+			// サブネットプレフィックス（例: /24）をマスク形式に変換
+			if strings.HasPrefix(value, "/") || isNumeric(value) {
+				return prefixToSubnetMask(value)
+			}
+			return value
+		}
+	}
+	return ""
 }
 
 // extractLastValue は行から最後の値を抽出します
@@ -229,7 +230,31 @@ func ApplyProfile(profile *models.Profile) error {
 		logger.Warn("現在の設定の取得に失敗（バックアップスキップ）", "error", err)
 	}
 
-	// IPアドレスとサブネットマスクを設定
+	// IPアドレス設定を適用
+	if err := applyIPSettings(profile); err != nil {
+		return err
+	}
+
+	// DNS設定を適用
+	applyDNSSettings(profile)
+
+	// 設定が正しく適用されたか確認
+	if err := verifyProfileApplication(profile); err != nil {
+		return err
+	}
+
+	logger.Info("IPアドレス設定の適用が完了", "profile", profile.Name, "ip", profile.IPAddress)
+
+	// バックアップ情報をログに記録（将来のロールバック機能用）
+	if currentConfig != nil {
+		logger.Info("バックアップ設定", "previous_ip", currentConfig.IPAddress)
+	}
+
+	return nil
+}
+
+// applyIPSettings はIPアドレス、サブネットマスク、ゲートウェイを設定します
+func applyIPSettings(profile *models.Profile) error {
 	args := []string{"interface", "ipv4", "set", "address",
 		"name=" + profile.NICName,
 		"static",
@@ -238,8 +263,8 @@ func ApplyProfile(profile *models.Profile) error {
 	if profile.Gateway != "" {
 		args = append(args, profile.Gateway)
 	}
-	cmd := createHiddenCmd("netsh", args...)
 
+	cmd := createHiddenCmd("netsh", args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		logger.Error("IPアドレス設定の適用に失敗", err, "output", string(output))
@@ -249,55 +274,55 @@ func ApplyProfile(profile *models.Profile) error {
 			Err:     err,
 		}
 	}
+	return nil
+}
 
-	// DNS設定を適用
+// applyDNSSettings はDNSサーバー設定を適用します
+// DNS設定の失敗は警告として記録し、処理は続行します
+func applyDNSSettings(profile *models.Profile) {
 	if profile.DNSPrimary != "" {
-		dnsCmd := createHiddenCmd("netsh", "interface", "ipv4", "set", "dns",
+		cmd := createHiddenCmd("netsh", "interface", "ipv4", "set", "dns",
 			"name="+profile.NICName,
 			"static",
 			profile.DNSPrimary)
-		if output, err := dnsCmd.CombinedOutput(); err != nil {
+		if output, err := cmd.CombinedOutput(); err != nil {
 			logger.Error("DNS設定の適用に失敗", err, "output", string(output))
-			// DNS設定の失敗は警告として記録するが、処理は続行
 		}
 	}
 
 	if profile.DNSSecondary != "" {
-		dnsCmd2 := createHiddenCmd("netsh", "interface", "ipv4", "add", "dns",
+		cmd := createHiddenCmd("netsh", "interface", "ipv4", "add", "dns",
 			"name="+profile.NICName,
 			profile.DNSSecondary,
 			"index=2")
-		if output, err := dnsCmd2.CombinedOutput(); err != nil {
+		if output, err := cmd.CombinedOutput(); err != nil {
 			logger.Error("代替DNS設定の適用に失敗", err, "output", string(output))
 		}
 	}
+}
 
-	// 設定が正しく適用されたか確認
+// verifyProfileApplication は設定が正しく適用されたかを確認します
+func verifyProfileApplication(profile *models.Profile) error {
 	appliedConfig, err := GetCurrentIPConfig(profile.NICName)
 	if err != nil {
 		logger.Warn("適用後の設定確認に失敗", "error", err)
-	} else if appliedConfig.IPAddress != profile.IPAddress {
+		return nil // 確認失敗は警告のみで続行
+	}
+
+	if appliedConfig.IPAddress != profile.IPAddress {
 		return &NetworkError{
 			Code:    "VERIFY_FAILED",
 			Message: "設定の適用が確認できませんでした",
 			Err:     fmt.Errorf("期待: %s, 実際: %s", profile.IPAddress, appliedConfig.IPAddress),
 		}
 	}
-
-	logger.Info("IPアドレス設定の適用が完了", "profile", profile.Name, "ip", profile.IPAddress)
-	
-	// バックアップ情報をログに記録（将来のロールバック機能用）
-	if currentConfig != nil {
-		logger.Info("バックアップ設定", "previous_ip", currentConfig.IPAddress)
-	}
-
 	return nil
 }
 
 // ApplyDHCP は指定されたNICをDHCPに切り替えます
 func ApplyDHCP(nicName string) error {
 	// NIC名の検証（コマンドインジェクション対策）
-	if !isValidNICName(nicName) {
+	if !models.IsValidNICName(nicName) {
 		return &NetworkError{
 			Code:    "INVALID_NIC_NAME",
 			Message: "NIC名に不正な文字が含まれています",

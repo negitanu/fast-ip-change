@@ -73,7 +73,7 @@ func (p *Profile) Validate() error {
 	}
 
 	// NIC名に危険な文字が含まれていないかチェック
-	if !isValidNICName(p.NICName) {
+	if !IsValidNICName(p.NICName) {
 		return fmt.Errorf("%w: 不正な文字が含まれています", ErrInvalidNICName)
 	}
 
@@ -140,9 +140,9 @@ func isValidSubnetMask(mask string) bool {
 	return (inverted & (inverted + 1)) == 0
 }
 
-// isValidNICName はNIC名が安全かどうかを検証します
-// コマンドインジェクション対策として危険な文字を禁止
-func isValidNICName(name string) bool {
+// IsValidNICName はNIC名が安全かどうかを検証します
+// コマンドインジェクション対策として、シェルメタキャラと制御文字を禁止
+func IsValidNICName(name string) bool {
 	if len(name) == 0 || len(name) > 256 {
 		return false
 	}

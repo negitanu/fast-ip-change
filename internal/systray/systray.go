@@ -19,22 +19,31 @@ import (
 
 // Note: internal/ui パッケージは settings.exe で使用されるため、このファイルでは使用しない
 
+// Windows プロセス作成フラグ
+const (
+	createNoWindow = 0x08000000 // CREATE_NO_WINDOW: コンソールウィンドウを表示しない
+)
+
 var (
-	appConfig       *models.Config
-	menuItems       map[string]*systray.MenuItem
-	profileStopChs  map[string]chan struct{} // goroutine停止用のチャネル
-	profileStopMu   sync.Mutex               // 排他制御用
-	dhcpMenuItems   map[string]*systray.MenuItem // DHCPメニュー項目（NIC名 -> メニュー項目）
+	appConfig      *models.Config
+	appConfigMu    sync.RWMutex                  // appConfig の排他制御用
+	menuItems      map[string]*systray.MenuItem
+	profileStopChs map[string]chan struct{}      // goroutine停止用のチャネル
+	profileStopMu  sync.Mutex                    // profileStopChs の排他制御用
+	dhcpMenuItems  map[string]*systray.MenuItem  // DHCPメニュー項目（NIC名 -> メニュー項目）
 )
 
 // Run はシステムトレイアプリケーションを起動します
 func Run() error {
 	// 設定を読み込み
-	var err error
-	appConfig, err = config.LoadConfig()
+	cfg, err := config.LoadConfig()
 	if err != nil {
 		return fmt.Errorf("設定の読み込みに失敗: %w", err)
 	}
+
+	appConfigMu.Lock()
+	appConfig = cfg
+	appConfigMu.Unlock()
 
 	// システムトレイを起動
 	systray.Run(onReady, onExit)
@@ -114,8 +123,12 @@ func setupDHCPSubMenu(parent *systray.MenuItem) {
 	dhcpMenuItems = make(map[string]*systray.MenuItem)
 
 	// 有効なNICのみサブメニュー項目を作成
+	appConfigMu.RLock()
+	settings := appConfig.Settings
+	appConfigMu.RUnlock()
+
 	for _, nic := range nics {
-		if !appConfig.Settings.IsNICEnabledForDHCP(nic) {
+		if !settings.IsNICEnabledForDHCP(nic) {
 			continue
 		}
 
@@ -159,15 +172,20 @@ func updateProfileMenu() {
 	}
 	menuItems = make(map[string]*systray.MenuItem)
 
+	// 設定を読み取り
+	appConfigMu.RLock()
+	profiles := appConfig.Profiles
+	appConfigMu.RUnlock()
+
 	// プロファイルが存在しない場合
-	if len(appConfig.Profiles) == 0 {
+	if len(profiles) == 0 {
 		mNoProfile := systray.AddMenuItem("プロファイルがありません", "")
 		mNoProfile.Disable()
 		return
 	}
 
 	// プロファイルメニューを追加
-	for _, profile := range appConfig.Profiles {
+	for _, profile := range profiles {
 		menuTitle := fmt.Sprintf("%s [%s]", profile.Name, profile.NICName)
 		menuItem := systray.AddMenuItem(menuTitle, fmt.Sprintf("IP: %s", profile.IPAddress))
 		menuItems[profile.ID] = menuItem
@@ -192,13 +210,16 @@ func updateProfileMenu() {
 
 func applyProfile(profileID string) {
 	// プロファイルを検索
+	appConfigMu.RLock()
 	var profile *models.Profile
 	for i := range appConfig.Profiles {
 		if appConfig.Profiles[i].ID == profileID {
-			profile = &appConfig.Profiles[i]
+			p := appConfig.Profiles[i] // コピーを作成
+			profile = &p
 			break
 		}
 	}
+	appConfigMu.RUnlock()
 
 	if profile == nil {
 		showNotification("エラー", "プロファイルが見つかりませんでした", false)
@@ -256,7 +277,7 @@ func showNICStatus() {
 	cmd := exec.Command(ipstatusPath)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		HideWindow:    true,
-		CreationFlags: 0x08000000, // CREATE_NO_WINDOW
+		CreationFlags: createNoWindow,
 	}
 
 	if err := cmd.Start(); err != nil {
@@ -264,6 +285,11 @@ func showNICStatus() {
 		showNotification("エラー", fmt.Sprintf("NIC状態画面を起動できませんでした: %v", err), false)
 		return
 	}
+
+	// プロセス終了を待ってハンドルを解放
+	go func() {
+		cmd.Wait()
+	}()
 }
 
 func showRouteTable() {
@@ -290,7 +316,7 @@ func showRouteTable() {
 	cmd := exec.Command(routetablePath)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		HideWindow:    true,
-		CreationFlags: 0x08000000, // CREATE_NO_WINDOW
+		CreationFlags: createNoWindow,
 	}
 
 	if err := cmd.Start(); err != nil {
@@ -298,6 +324,11 @@ func showRouteTable() {
 		showNotification("エラー", fmt.Sprintf("ルーティングテーブル画面を起動できませんでした: %v", err), false)
 		return
 	}
+
+	// プロセス終了を待ってハンドルを解放
+	go func() {
+		cmd.Wait()
+	}()
 }
 
 func openSettings() {
@@ -324,7 +355,7 @@ func openSettings() {
 	cmd := exec.Command(settingsPath)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		HideWindow:    true,
-		CreationFlags: 0x08000000, // CREATE_NO_WINDOW
+		CreationFlags: createNoWindow,
 	}
 
 	if err := cmd.Start(); err != nil {
@@ -338,12 +369,16 @@ func openSettings() {
 		cmd.Wait()
 		logger.Info("設定アプリが終了しました。設定を再読み込みします。")
 
-		var err error
-		appConfig, err = config.LoadConfig()
+		cfg, err := config.LoadConfig()
 		if err != nil {
 			logger.Error("設定の再読み込みに失敗", err)
 			return
 		}
+
+		appConfigMu.Lock()
+		appConfig = cfg
+		appConfigMu.Unlock()
+
 		updateProfileMenu()
 		updateDHCPMenu()
 	}()
@@ -373,7 +408,7 @@ func showLogs() {
 	cmd := exec.Command(logviewerPath)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		HideWindow:    true,
-		CreationFlags: 0x08000000, // CREATE_NO_WINDOW
+		CreationFlags: createNoWindow,
 	}
 
 	if err := cmd.Start(); err != nil {
@@ -381,10 +416,19 @@ func showLogs() {
 		showNotification("エラー", fmt.Sprintf("ログビューアを起動できませんでした: %v", err), false)
 		return
 	}
+
+	// プロセス終了を待ってハンドルを解放
+	go func() {
+		cmd.Wait()
+	}()
 }
 
 func showNotification(title, message string, success bool) {
-	if !appConfig.Settings.EnableNotifications {
+	appConfigMu.RLock()
+	enableNotifications := appConfig.Settings.EnableNotifications
+	appConfigMu.RUnlock()
+
+	if !enableNotifications {
 		return
 	}
 

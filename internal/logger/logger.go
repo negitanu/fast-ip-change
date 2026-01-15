@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -18,8 +19,25 @@ var (
 	logFile *os.File
 )
 
+// ParseLogLevel は文字列からslog.Levelを取得します
+func ParseLogLevel(level string) slog.Level {
+	switch strings.ToUpper(level) {
+	case "DEBUG":
+		return slog.LevelDebug
+	case "INFO":
+		return slog.LevelInfo
+	case "WARN", "WARNING":
+		return slog.LevelWarn
+	case "ERROR":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
+}
+
 // Init はロガーを初期化します
-func Init() error {
+// logLevel: ログレベル（"DEBUG", "INFO", "WARN", "ERROR"）。空の場合はINFOがデフォルト
+func Init(logLevel string) error {
 	appData, err := os.UserConfigDir()
 	if err != nil {
 		return fmt.Errorf("設定ディレクトリの取得に失敗: %w", err)
@@ -42,9 +60,12 @@ func Init() error {
 	// 標準出力とファイルの両方に出力するMultiWriterを作成
 	multiWriter := io.MultiWriter(os.Stdout, logFile)
 
+	// ログレベルを解析
+	level := ParseLogLevel(logLevel)
+
 	// slogハンドラーを作成（標準出力とファイル両方に出力）
 	logger = slog.New(slog.NewTextHandler(multiWriter, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
+		Level: level,
 	}))
 
 	return nil
@@ -59,6 +80,11 @@ func GetLogger() *slog.Logger {
 		}))
 	}
 	return logger
+}
+
+// Debug はデバッグログを記録します
+func Debug(msg string, args ...any) {
+	GetLogger().Debug(msg, args...)
 }
 
 // Info は情報ログを記録します

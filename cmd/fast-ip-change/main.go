@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/fast-ip-change/fast-ip-change/internal/config"
 	"github.com/fast-ip-change/fast-ip-change/internal/logger"
 	"github.com/fast-ip-change/fast-ip-change/internal/systray"
 	"github.com/fast-ip-change/fast-ip-change/internal/utils"
@@ -33,8 +34,14 @@ func main() {
 		os.Exit(1)
 	}
 
+	// 設定を読み込んでログレベルを取得
+	logLevel := "INFO"
+	if cfg, err := config.LoadConfig(); err == nil {
+		logLevel = cfg.Settings.LogLevel
+	}
+
 	// ロガーの初期化
-	if err := logger.Init(); err != nil {
+	if err := logger.Init(logLevel); err != nil {
 		fmt.Fprintf(os.Stderr, "ロガーの初期化に失敗: %v\n", err)
 		// ロガーの初期化失敗は致命的ではないので続行
 	}

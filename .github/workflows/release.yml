@@ -15,6 +15,14 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 全履歴を取得（リリースノート生成のため）
+
+      - name: Debug tag info
+        run: |
+          echo "Tag name: ${{ github.ref_name }}"
+          echo "Ref: ${{ github.ref }}"
+          echo "SHA: ${{ github.sha }}"
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -40,12 +48,34 @@ jobs:
           go build -ldflags="-H windowsgui -s -w" -trimpath -o routetable.exe ./cmd/routetable
           go build -ldflags="-H windowsgui -s -w" -trimpath -o logviewer.exe ./cmd/logviewer
 
+      - name: Verify build artifacts
+        run: |
+          if (Test-Path fast-ip-change.exe) { Write-Host "✓ fast-ip-change.exe exists" } else { Write-Host "✗ fast-ip-change.exe missing"; exit 1 }
+          if (Test-Path settings.exe) { Write-Host "✓ settings.exe exists" } else { Write-Host "✗ settings.exe missing"; exit 1 }
+          if (Test-Path ipstatus.exe) { Write-Host "✓ ipstatus.exe exists" } else { Write-Host "✗ ipstatus.exe missing"; exit 1 }
+          if (Test-Path routetable.exe) { Write-Host "✓ routetable.exe exists" } else { Write-Host "✗ routetable.exe missing"; exit 1 }
+          if (Test-Path logviewer.exe) { Write-Host "✓ logviewer.exe exists" } else { Write-Host "✗ logviewer.exe missing"; exit 1 }
+
       - name: Create release zip
         run: |
-          Compress-Archive -Path *.exe, settings.example.json, README.md, LICENSE -DestinationPath fast-ip-change-${{ github.ref_name }}.zip
+          $zipName = "fast-ip-change-${{ github.ref_name }}.zip"
+          Compress-Archive -Path *.exe, settings.example.json, README.md, LICENSE -DestinationPath $zipName
+          Write-Host "Created: $zipName"
+          if (Test-Path $zipName) {
+            $size = (Get-Item $zipName).Length
+            Write-Host "Zip size: $size bytes"
+          } else {
+            Write-Host "✗ Zip file not created"; exit 1
+          }
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
+          tag_name: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
           files: fast-ip-change-${{ github.ref_name }}.zip
           generate_release_notes: true
+          draft: false
+          prerelease: false
