@@ -1,0 +1,63 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+
+      - name: Install rsrc
+        run: go install github.com/akavel/rsrc@latest
+
+      - name: Generate resources
+        run: |
+          cd cmd/fast-ip-change && rsrc -manifest fast-ip-change.manifest -ico ../../assets/systray.ico -o rsrc.syso
+          cd ../settings && rsrc -manifest settings.manifest -ico ../../assets/systray.ico -o rsrc.syso
+          cd ../ipstatus && rsrc -manifest ipstatus.manifest -ico ../../assets/systray.ico -o rsrc.syso
+          cd ../routetable && rsrc -manifest routetable.manifest -ico ../../assets/systray.ico -o rsrc.syso
+          cd ../logviewer && rsrc -manifest logviewer.manifest -ico ../../assets/systray.ico -o rsrc.syso
+
+      - name: Build
+        run: |
+          go build -ldflags="-H windowsgui -s -w" -trimpath -o fast-ip-change.exe ./cmd/fast-ip-change
+          go build -ldflags="-H windowsgui -s -w" -trimpath -o settings.exe ./cmd/settings
+          go build -ldflags="-H windowsgui -s -w" -trimpath -o ipstatus.exe ./cmd/ipstatus
+          go build -ldflags="-H windowsgui -s -w" -trimpath -o routetable.exe ./cmd/routetable
+          go build -ldflags="-H windowsgui -s -w" -trimpath -o logviewer.exe ./cmd/logviewer
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: fast-ip-change-windows
+          path: |
+            *.exe
+            settings.example.json
+          retention-days: 7
+
+  test:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+
+      - name: Test
+        run: go test ./...
