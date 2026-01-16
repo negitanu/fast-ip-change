@@ -1,5 +1,10 @@
 # Fast IP Change
 
+![Go Version](https://img.shields.io/badge/Go-1.24-blue?logo=go)
+![License](https://img.shields.io/badge/License-Apache%202.0-green.svg)
+![Platform](https://img.shields.io/badge/Platform-Windows-lightgrey?logo=windows)
+![GitHub Actions](https://img.shields.io/badge/GitHub%20Actions-enabled-brightgreen?logo=github-actions)
+
 Windowsのタスクバー（システムトレイ）に常駐し、指定したIPアドレスに自動でネットワークインターフェースカード（NIC）の設定を変更するアプリケーション。
 
 ## 機能
@@ -116,9 +121,15 @@ fast-ip-change/
 
 主要な依存関係：
 
+![systray](https://img.shields.io/badge/systray-v1.2.2-blue) - システムトレイ
+![go-toast](https://img.shields.io/badge/go--toast-v0.0.0-blue) - Windows通知
+![uuid](https://img.shields.io/badge/uuid-v1.6.0-blue) - UUID生成
+![walk](https://img.shields.io/badge/walk-v0.0.0-blue) - Windows GUI
+![golang.org/x/sys](https://img.shields.io/badge/golang.org%2Fx%2Fsys-v0.20.0-blue) - Windows API
+
 - `github.com/getlantern/systray` - システムトレイ
-- `github.com/go-ole/go-ole` - COMインターフェース
 - `github.com/go-toast/toast` - Windows通知
+- `github.com/google/uuid` - UUID生成
 - `github.com/lxn/walk` - Windows GUI
 - `golang.org/x/sys/windows` - Windows API
 
